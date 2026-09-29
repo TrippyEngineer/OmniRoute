@@ -38,6 +38,7 @@ import { isCommonChatGptWebRetiredProviderId } from "@/shared/constants/chatgptW
 import { toNumber } from "@/shared/utils/numeric";
 import { isMicrosoftDesignerWebRetiredProviderId } from "@/shared/constants/designerWebRetirement";
 import { isRuntimeRetiredProviderId } from "@/shared/constants/providerRetirement";
+import { allowlistPermitsSyntheticNoAuth } from "./noAuthAllowlist";
 import {
   createLazyConnectionView,
   toProviderConnection,
@@ -642,16 +643,6 @@ function compareP2CConnections(
  */
 const SYNTHETIC_NOAUTH_CONNECTION_ID = "noauth";
 
-/**
- * #9057 gate for the synthetic keyless connection: allowed when there is no
- * allowlist, or when the allowlist names the synthetic id explicitly. The auto
- * combo pins keyless targets to "noauth", and pin-fail-closed
- * (`implicitPinAllowlist`) turns that pin into the allowlist ["noauth"].
- */
-function allowlistPermitsSyntheticNoAuth(allowedConnections: string[] | null | undefined) {
-  if (!Array.isArray(allowedConnections) || allowedConnections.length === 0) return true;
-  return allowedConnections.includes(SYNTHETIC_NOAUTH_CONNECTION_ID);
-}
 type AnonymousFallbackProviderDefinition = {
   anonymousFallback?: boolean;
   noAuth?: boolean;
@@ -791,10 +782,8 @@ async function maybeSyntheticNoAuthFallback(
   allowedConnections: string[] | null = null
 ) {
   if (!providerCanUseSyntheticNoAuthFallback(providerId)) return null;
-  // #9057: a key pinned to specific connections via allowedConnections must
-  // NOT receive the synthetic "noauth" connection unless the allowlist names
-  // it — returning it would let a restricted key reach free providers
-  // (OpenCode Free, etc.) that it should not access.
+  // #9057: a restricted key must NOT reach free providers (OpenCode Free, etc.) through the
+  // synthetic "noauth" connection unless its allowedConnections names it.
   if (!allowlistPermitsSyntheticNoAuth(allowedConnections)) return null;
   if (excludedConnectionIds.has(SYNTHETIC_NOAUTH_CONNECTION_ID)) return null;
   // #14313: a free-tier refusal just paused this keyless path — do not re-select
@@ -1228,11 +1217,8 @@ export async function getProviderCredentials(
       ) {
         return optionalKey;
       }
-      // #9057: when allowedConnections is set and does not name the synthetic
-      // "noauth" connection, we must NOT return it — fall through to the normal
-      // connection-selection path so the connection allowlist is respected (the
-      // no-auth provider will be rejected if it has no real connections matching
-      // the allowlist, or a real connection row will be selected if present).
+      // #9057: an allowlist that does not name "noauth" falls through to the normal
+      // connection-selection path so the allowlist is respected.
       if (allowlistPermitsSyntheticNoAuth(allowedConnections)) {
         // #13483: check model-only lockout before handing back the synthetic
         // connection. Without this, a locked model (e.g. 400 model_capacity)
